@@ -1,8 +1,8 @@
 ﻿using System;
-using System.Threading;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Threading;
 
 namespace TaskWorkerTest
 {
@@ -12,11 +12,11 @@ namespace TaskWorkerTest
     {
         #region Variables
 
-        private object ReturnObj = "Empty ReturnObj"; //Holds the ReturnObj, instantiated with placeholder string to avoid NullReferenceException
+        private object _returnObj = "Empty ReturnObj"; //Holds the ReturnObj, instantiated with placeholder string to avoid NullReferenceException
 
-        private object SenderObj = "Empty Sender"; //Holds the SenderObj, instantiated with placeholder string to avoid NullReferenceException
+        private object _renderObj = "Empty Sender"; //Holds the SenderObj, instantiated with placeholder string to avoid NullReferenceException
 
-        #endregion
+        #endregion Variables
 
         #region Properties
 
@@ -24,7 +24,7 @@ namespace TaskWorkerTest
         {
             get
             {
-                return ReturnObj;
+                return _returnObj;
             }
         }
 
@@ -32,25 +32,26 @@ namespace TaskWorkerTest
         {
             get
             {
-                return SenderObj;
+                return _renderObj;
             }
         } //Returns the SenderObj
 
-        #endregion
+        #endregion Properties
 
         #region Constructors
 
         public TaskWorkerEventArgs(object returnObj) //Args with no sender
         {
-            ReturnObj = returnObj; //Get the object to be returned with the event args.
+            _returnObj = returnObj; //Get the object to be returned with the event args.
         }
 
         public TaskWorkerEventArgs(object returnObj, object sender) //Args with sender
         {
-            ReturnObj = returnObj; //Get the object to be returned with the event args.
-            SenderObj = sender;    //Get the sender object to be returned with the event args.
+            _returnObj = returnObj; //Get the object to be returned with the event args.
+            _renderObj = sender;    //Get the sender object to be returned with the event args.
         }
-        #endregion
+
+        #endregion Constructors
     }
 
     public class TaskWorkerExitToken { } //Empty class to serve as a token to close the queue thread (hackish, yes, but it works!)
@@ -59,11 +60,15 @@ namespace TaskWorkerTest
     {
         #region Variables
 
-        private BlockingCollection<object> TaskQueue; //Used to block the infinite queue loop until there's a task object to work on
-        public List<Task> Tasks { get; set; }
-        #endregion
+        private BlockingCollection<object> _taskQueue; //Used to block the infinite queue loop until there's a task object to work on
+        private bool _killed = false;
+
+        private List<Task> Tasks { get; set; }
+
+        #endregion Variables
 
         #region Properties
+
         public int RunningTaskCount
         {
             get
@@ -71,25 +76,39 @@ namespace TaskWorkerTest
                 return Tasks.Count;
             }
         }
+
         public int WaitingTaskCount
         {
             get
             {
-                return TaskQueue.Count;
+                return _taskQueue.Count;
             }
         }
-        
-        #endregion
+
+        public List<string> WaitingTaskNames
+        {
+            get
+            {
+                List<string> temp = new List<string>();
+                foreach (object o in _taskQueue)
+                {
+                    temp.Add(o.ToString());
+                }
+                return temp;
+            }
+        }
+
+        #endregion Properties
 
         #region Constructors
 
         public TaskWorker()
         {
-            TaskQueue = new BlockingCollection<object>(); //Instantiates the collection
+            _taskQueue = new BlockingCollection<object>(); //Instantiates the collection
             Tasks = new List<Task>();
         }
 
-        #endregion
+        #endregion Constructors
 
         #region Functions
 
@@ -98,7 +117,7 @@ namespace TaskWorkerTest
             while (true) //start an infinite loop
             {
                 object obj;
-                obj = TaskQueue.Take(); //Fish us out the first object in the queue! If empty, will block the thread until not empty
+                obj = _taskQueue.Take(); //Fish us out the first object in the queue! If empty, will block the thread until not empty
 
                 if (obj == null) //Check null, derp!
                 {
@@ -107,7 +126,12 @@ namespace TaskWorkerTest
 
                 if (obj is TaskWorkerExitToken) //Check for exit token
                 {
+                    _killed = true;
                     RaiseReturn(obj, obj); //Report exit token to main thread
+                    foreach (object o in _taskQueue)
+                    {
+                        object clearbuffer = _taskQueue.Take();
+                    }
                     break; //Throw wrench in loop, KABOOOOOOOOOOOM
                 }
                 else if (obj is bool) //If bool, just toss it to the main thread,
@@ -126,9 +150,9 @@ namespace TaskWorkerTest
                     eventThread.IsBackground = true;
                     eventThread.Start();
                 }
-                
             }
         }
+
         public void End()
         {
             for (int i = (Tasks.Count - 1); i >= 0; i--)
@@ -140,12 +164,17 @@ namespace TaskWorkerTest
                     t.Kill();
                 }
             }
-            TaskQueue.Add(new TaskWorkerExitToken());
+            _taskQueue.Add(new TaskWorkerExitToken());
         }
+
         public void Add(object addObj)
         {
-            TaskQueue.Add(addObj);
+            if (!_killed)
+            {
+                _taskQueue.Add(addObj);
+            }
         }
+
         public Task GetTask(Guid g)
         {
             foreach (Task t in Tasks)
@@ -157,9 +186,11 @@ namespace TaskWorkerTest
             }
             return null;
         }
-        #endregion
+
+        #endregion Functions
 
         #region Events
+
         public event TaskWorkerEventHandler OnReturn;
 
         private void RaiseReturn(object returnObj) //Implementation of RaiseReturn(returnObj) event
@@ -168,18 +199,17 @@ namespace TaskWorkerTest
 
             OnReturn(EventArgs);
         }
+
         private void RaiseReturn(object returnObj, object sender) //Overload of RaiseReturn(returnObj), adds sender reference
         {
             TaskWorkerEventArgs EventArgs = new TaskWorkerEventArgs(returnObj, sender);
             if (sender is Task)
             {
-                if (!((bool)returnObj))
-                {
-                    Tasks.Remove((Task)sender);
-                }
+                Tasks.Remove((Task)sender);
             }
             OnReturn(EventArgs);
         }
-        #endregion
+
+        #endregion Events
     }
 }
